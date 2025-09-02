@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import styled from 'styled-components';
 import { supabase } from '../services/supabase';
 import { useAuth } from '../context/AuthContext';
@@ -13,19 +13,22 @@ import { motion } from 'framer-motion';
 const PageWrapper = styled.div`
     padding-bottom: 120px;
 `;
+
 const Banner = styled.div<{ $bgUrl?: string }>`
-    height: 40vh;
+    height: 35vh;
     background-image: linear-gradient(to top, #121212 5%, transparent 50%), url(${props => props.$bgUrl || 'https://images.unsplash.com/photo-1511367461989-f85a21fda167?w=800&q=80'});
     background-size: cover;
     background-position: center;
 `;
-const UserInfoContainer = styled.div`
+
+const InfoBar = styled.div`
     display: flex;
     align-items: flex-end;
     gap: 30px;
     padding: 0 50px;
     transform: translateY(-75px);
 `;
+
 const Avatar = styled.img`
     width: 150px;
     height: 150px;
@@ -34,11 +37,11 @@ const Avatar = styled.img`
     box-shadow: 0 10px 30px rgba(0,0,0,0.5);
     object-fit: cover;
 `;
+
 const TextInfo = styled.div`
-    display: flex;
-    flex-direction: column;
     padding-bottom: 20px;
 `;
+
 const Username = styled.h1`
     font-size: 3.5rem;
     font-weight: 900;
@@ -46,14 +49,21 @@ const Username = styled.h1`
     align-items: center;
     gap: 15px;
     color: white;
-    text-shadow: 0 2px 10px rgba(0,0,0,0.5);
 `;
+
 const Stats = styled.div`
     display: flex;
-    gap: 20px;
+    gap: 25px;
     color: #b3b3b3;
     margin-top: 10px;
 `;
+
+const StatItem = styled.span`
+    display: flex;
+    align-items: center;
+    gap: 8px;
+`;
+
 const ActionButton = styled.button`
     margin-left: auto;
     background: rgba(255,255,255,0.1);
@@ -77,26 +87,56 @@ const ActionButton = styled.button`
         cursor: not-allowed; 
     }
 `;
+
 const Content = styled.div`
     padding: 0 50px;
-    margin-top: -50px;
+    margin-top: -40px;
 `;
+
 const SectionTitle = styled.h2`
     font-size: 2rem;
     font-weight: 700;
-    margin-bottom: 20px;
+    margin: 40px 0 20px 0;
 `;
+
 const TracksGrid = styled.div`
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
     gap: 20px;
 `;
 
+const FriendsGrid = styled.div`
+    display: flex;
+    gap: -15px; // Create overlapping effect
+`;
+
+const FriendAvatar = styled(Link)`
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 3px solid #121212;
+    transition: transform 0.2s;
+
+    &:hover {
+        transform: scale(1.1);
+    }
+
+    img {
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        object-fit: cover;
+    }
+`;
+
 export function ProfilePage() {
     const { id: profileId } = useParams<{ id: string }>();
     const { session } = useAuth();
+    const navigate = useNavigate();
     const [profile, setProfile] = useState<Profile | null>(null);
     const [likedTracks, setLikedTracks] = useState<Track[]>([]);
+    const [friends, setFriends] = useState<any[]>([]);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [friendStatus, setFriendStatus] = useState<'not_friends' | 'pending_sent' | 'pending_received' | 'accepted' | 'is_self'>('is_self');
 
@@ -114,6 +154,11 @@ export function ProfilePage() {
             setLikedTracks(tracks);
         }
 
+        const { data: friendsData } = await supabase.from('friends').select('*, user_one:profiles!user_one_id(*), user_two:profiles!user_two_id(*)').eq('status', 'accepted').or(`user_one_id.eq.${profileId},user_two_id.eq.${profileId}`);
+        if(friendsData) {
+            setFriends(friendsData.map(f => f.user_one_id === profileId ? f.user_two : f.user_one));
+        }
+        
         if (session?.user && !isOwner) {
             const { data } = await supabase.from('friends')
                 .select('status, action_user_id')
@@ -132,21 +177,16 @@ export function ProfilePage() {
         } else if (isOwner) {
             setFriendStatus('is_self');
         }
-
     }, [profileId, session, isOwner]);
 
     useEffect(() => {
         fetchData();
-        // Подписываемся на изменения в таблице friends, чтобы обновлять статус в реальном времени
-        const channel = supabase.channel(`friends-status-${profileId}`)
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'friends' }, fetchData)
-            .subscribe();
+        const channel = supabase.channel(`profile-${profileId}`).on('postgres_changes', { event: '*', schema: 'public' }, fetchData).subscribe();
         return () => { supabase.removeChannel(channel); };
     }, [fetchData, profileId]);
 
     const handleFriendAction = async () => {
         if (!session?.user || !profileId || isOwner) return;
-
         if (friendStatus === 'not_friends') {
             const { error } = await supabase.from('friends').insert({
                 user_one_id: session.user.id,
@@ -155,7 +195,6 @@ export function ProfilePage() {
                 action_user_id: session.user.id
             });
             if (!error) {
-                // ✅ ИСПРАВЛЕНИЕ: Мгновенно обновляем состояние кнопки
                 setFriendStatus('pending_sent');
             }
         }
@@ -176,14 +215,13 @@ export function ProfilePage() {
         }
     };
 
-    if (!profile) return <div>Загрузка профиля...</div>;
-    const navigate = useNavigate();
+    if (!profile) return <div>Загрузка...</div>;
 
     return (
         <>
             <PageWrapper>
                 <Banner $bgUrl={profile.banner_url} />
-                <UserInfoContainer>
+                <InfoBar>
                     <Avatar src={profile.avatar_url || `https://api.dicebear.com/8.x/bottts/svg?seed=${profile.username}`} />
                     <TextInfo>
                         <Username>
@@ -191,14 +229,27 @@ export function ProfilePage() {
                             {profile.is_admin && <Crown size={30} color="#facc15" />}
                         </Username>
                         <Stats>
-                            <span><Heart size={14}/> {likedTracks.length} любимых треков</span>
+                            <StatItem><Heart size={14}/> {likedTracks.length} любимых треков</StatItem>
+                            <StatItem><Users size={14}/> {friends.length} друзей</StatItem>
                         </Stats>
                     </TextInfo>
                     {renderFriendButton()}
-                </UserInfoContainer>
+                </InfoBar>
                 <Content>
-                    {likedTracks.length > 0 ? (
-                        <>
+                    {friends.length > 0 && (
+                        <motion.section initial={{opacity:0}} animate={{opacity:1}} transition={{delay:0.2}}>
+                            <SectionTitle>Друзья</SectionTitle>
+                            <FriendsGrid>
+                                {friends.slice(0, 10).map(friend => 
+                                <FriendAvatar key={friend.id} to={`/profile/${friend.id}`} title={friend.username}>
+                                    <img src={friend.avatar_url} alt={friend.username} />
+                                </FriendAvatar>)}
+                            </FriendsGrid>
+                        </motion.section>
+                    )}
+                    
+                    {likedTracks.length > 0 && (
+                        <motion.section initial={{opacity:0}} animate={{opacity:1}} transition={{delay:0.4}}>
                             <SectionTitle>Любимые треки</SectionTitle>
                             <TracksGrid>
                                 {likedTracks.map((track, index) => (
@@ -207,11 +258,7 @@ export function ProfilePage() {
                                     </motion.div>
                                 ))}
                             </TracksGrid>
-                        </>
-                    ) : (
-                        <p style={{ color: '#888', textAlign: 'center', marginTop: '50px' }}>
-                            {isOwner ? 'Вы еще не лайкнули ни одного трека.' : 'Пользователь еще не добавил треки в избранное.'}
-                        </p>
+                        </motion.section>
                     )}
                 </Content>
             </PageWrapper>
